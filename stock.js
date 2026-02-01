@@ -697,28 +697,45 @@ function isTradingDay() {
     return day >= 1 && day <= 5;
 }
 
-// 格式化訊息
-function formatStockMessage(stocks, marketData = {}) {
-    if (stocks.length === 0) return '監控清單為空';
+// 格式化訊息（分為監控清單和推薦股票）
+function formatStockMessages(stocks, marketData = {}) {
+    if (stocks.length === 0) {
+        return { watchlist: '監控清單為空', recommendations: null };
+    }
     
-    let msg = '📈 股票監控 & 技術分析\n';
-    msg += '═'.repeat(22) + '\n';
+    let watchlist = '📈 <b>股票監控清單</b>\n';
+    watchlist += '═'.repeat(22) + '\n';
     
     // 大盤資訊
     if (marketData.twii) {
         const twiiEmoji = parseFloat(marketData.twii.change) >= 0 ? '🟢' : '🔴';
-        msg += `📊 台股: ${marketData.twii.price} (${twiiEmoji} ${marketData.twii.change}%)\n`;
+        watchlist += `📊 台股: ${marketData.twii.price} (${twiiEmoji} ${marketData.twii.change}%)\n`;
     }
     
     // 檢查是否為交易日
     if (!isTradingDay()) {
-        msg += '⚪ 今天是週末，股市休市\n';
-        msg += '═'.repeat(22) + '\n';
-        msg += '開盤日再更新股價\n';
-        return msg;
+        watchlist += '⚪ 今天是週末，股市休市\n';
+        watchlist += '═'.repeat(22) + '\n';
+        watchlist += '開盤日再更新股價';
+        return { watchlist, recommendations: null };
     }
     
-    // 挑選推薦股票（前5檔）- 使用 predictNextDay 的評分
+    // 監控清單
+    stocks.forEach(s => {
+        const emoji = s.percent >= 0 ? '🟢' : '🔴';
+        watchlist += `${emoji} <b>${s.id} ${getStockName(s.id)}</b>: $${s.price} (${s.change}%)\n`;
+        
+        if (s.prediction) {
+            const confEmoji = s.prediction.confidence === '高' ? '💪' : s.prediction.confidence === '中' ? '👌' : '🤔';
+            watchlist += `   🔮 ${s.prediction.prediction} ${confEmoji} | 評分: ${s.prediction.score}\n`;
+            watchlist += `   RSI: ${s.prediction.factors?.rsi || 'N/A'} | MACD: ${s.prediction.factors?.macd || 'N/A'}\n`;
+        }
+        watchlist += '─'.repeat(22) + '\n';
+    });
+    
+    watchlist += `\n🕐 ${stocks[0]?.time || 'N/A'}`;
+    
+    // 推薦股票 TOP 5
     const stocksWithScore = stocks.map(s => ({
         ...s,
         score: parseFloat(s.prediction?.score || 0),
@@ -726,65 +743,51 @@ function formatStockMessage(stocks, marketData = {}) {
     }));
     
     const sorted = [...stocksWithScore].sort((a, b) => b.score - a.score);
+    const top5 = sorted.slice(0, 5).filter(s => s.score > 0);
     
-    const top5 = sorted.slice(0, 5);
-    const hasPositive = top5.some(s => s.score > 0);
-    
-    if (hasPositive) {
-        msg += '\n🌟 <b>推薦股票 TOP 5</b>\n';
-        msg += '─'.repeat(22) + '\n';
+    let recommendations = null;
+    if (top5.length > 0) {
+        recommendations = '🌟 <b>推薦股票 TOP 5</b>\n';
+        recommendations += '═'.repeat(22) + '\n';
         
         top5.forEach((s, i) => {
-            if (s.score > 0) {
-                const stars = s.score >= 5 ? '⭐⭐⭐' : s.score >= 3 ? '⭐⭐' : '⭐';
-                msg += `${i+1}. <b>${s.id} ${getStockName(s.id)}</b> ${stars} ${s.prediction}\n`;
-                msg += `   評分: ${s.score.toFixed(1)} | ${s.price} (${s.change}%)\n`;
+            const emoji = s.percent >= 0 ? '🟢' : '🔴';
+            const stars = s.score >= 5 ? '⭐⭐⭐' : s.score >= 3 ? '⭐⭐' : '⭐';
+            recommendations += `${i+1}. <b>${s.id} ${getStockName(s.id)}</b> ${stars} ${s.prediction}\n`;
+            recommendations += `   評分: ${s.score.toFixed(1)} | $${s.price} (${emoji} ${s.change}%)\n`;
+            if (s.prediction.reasons && s.prediction.reasons.length > 0) {
+                recommendations += `   重點: ${s.prediction.reasons[0]}\n`;
             }
+            recommendations += '─'.repeat(22) + '\n';
         });
-        msg += '\n';
+        
+        recommendations += `\n🕐 ${stocks[0]?.time || 'N/A'}`;
     }
     
-    stocks.forEach(s => {
-        const emoji = s.percent >= 0 ? '🟢' : '🔴';
-        msg += `${emoji} ${s.id}: $${s.price} (${s.change})\n`;
-        
-        // 明日走勢預測
-        if (s.prediction) {
-            const confEmoji = s.prediction.confidence === '高' ? '💪' : s.prediction.confidence === '中' ? '👌' : '🤔';
-            msg += `   🔮 明日預測: ${s.prediction.prediction} ${confEmoji}\n`;
-            msg += `   信心度: ${s.prediction.confidence} | 評分: ${s.prediction.score}\n`;
-            if (s.prediction.reasons && s.prediction.reasons.length > 0) {
-                msg += `   重點: ${s.prediction.reasons[0]}\n`;
-            }
-        }
-        
-        // 技術分析
-        msg += `   ${s.analysis.signal}\n`;
-        if (s.analysis.reasons && s.analysis.reasons.length > 0) {
-            s.analysis.reasons.forEach(r => {
-                msg += `   • ${r}\n`;
-            });
-        }
-        
-        msg += '─'.repeat(22) + '\n';
-    });
-    
-    msg += `時間: ${stocks[0]?.time || 'N/A'}\n`;
-    msg += `排程: 週一至五 20:00\n`;
-    
-    return msg;
+    return { watchlist, recommendations };
 }
 
-// 發送 Telegram 通知
-async function sendTelegramNotification(message) {
+// 發送 Telegram 通知（支援多封訊息）
+async function sendTelegramNotifications(messages) {
     if (!telegramBot || !global.telegramConfig?.chatId) {
         log('Telegram 未設定，無法發送通知');
         return false;
     }
     
     try {
-        await telegramBot.sendMessage(global.telegramConfig.chatId, message, { parse_mode: 'HTML' });
-        log('Telegram 通知已發送');
+        // 發送第一封（監控清單）
+        if (messages.watchlist) {
+            await telegramBot.sendMessage(global.telegramConfig.chatId, messages.watchlist, { parse_mode: 'HTML' });
+            log('監控清單已發送');
+        }
+        
+        // 發送第二封（推薦股票）
+        if (messages.recommendations) {
+            await new Promise(resolve => setTimeout(resolve, 500)); // 稍微延遲
+            await telegramBot.sendMessage(global.telegramConfig.chatId, messages.recommendations, { parse_mode: 'HTML' });
+            log('推薦股票已發送');
+        }
+        
         return true;
     } catch (err) {
         log(`Telegram 發送失敗: ${err.message}`);
@@ -807,8 +810,14 @@ async function test() {
     log('測試抓取股價...');
     const marketData = await getMarketData();
     const stocks = await getAllStockData();
-    const msg = formatStockMessage(stocks, marketData);
-    console.log(msg);
+    const messages = formatStockMessages(stocks, marketData);
+    
+    console.log('--- 監控清單 ---');
+    console.log(messages.watchlist);
+    console.log('\n--- 推薦股票 ---');
+    console.log(messages.recommendations || '無推薦');
+    
+    await sendTelegramNotifications(messages);
     log('測試完成');
 }
 
@@ -821,11 +830,9 @@ cron.schedule('0 20 * * 1-5', async () => {
     log('定時檢查股價');
     const marketData = await getMarketData();
     const stockData = await getAllStockData();
-    const msg = formatStockMessage(stockData, marketData);
-    console.log(msg);
+    const messages = formatStockMessages(stockData, marketData);
     
-    // 發送 Telegram 通知
-    await sendTelegramNotification('```\n' + msg + '\n```');
+    await sendTelegramNotifications(messages);
     log('股價通知已發送');
 });
 
