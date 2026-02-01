@@ -694,6 +694,31 @@ function formatStockMessage(stocks, marketData = {}) {
         return msg;
     }
     
+    // 挑選推薦股票（前5檔）
+    const sorted = [...stocks].sort((a, b) => {
+        const scoreA = parseFloat(a.prediction?.score || 0);
+        const scoreB = parseFloat(b.prediction?.score || 0);
+        return scoreB - scoreA;
+    });
+    
+    const top5 = sorted.slice(0, 5);
+    const hasPositive = top5.some(s => parseFloat(s.prediction?.score || 0) > 0);
+    
+    if (hasPositive) {
+        msg += '\n🌟 <b>推薦股票 TOP 5</b>\n';
+        msg += '─'.repeat(22) + '\n';
+        
+        top5.forEach((s, i) => {
+            if (parseFloat(s.prediction?.score || 0) > 0) {
+                const score = parseFloat(s.prediction?.score || 0);
+                const stars = score >= 5 ? '⭐⭐⭐' : score >= 3 ? '⭐⭐' : '⭐';
+                msg += `${i+1}. <b>${s.id}</b> ${stars} ${s.prediction?.prediction || '⚪'}\n`;
+                msg += `   評分: ${s.prediction?.score} | ${s.price} (${s.change}%)\n`;
+            }
+        });
+        msg += '\n';
+    }
+    
     stocks.forEach(s => {
         const emoji = s.percent >= 0 ? '🟢' : '🔴';
         msg += `${emoji} ${s.id}: $${s.price} (${s.change})\n`;
