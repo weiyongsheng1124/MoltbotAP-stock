@@ -175,6 +175,30 @@ function calculateMA(prices, days) {
     return sum / days;
 }
 
+// 台股股票名稱對照表
+const STOCK_NAMES = {
+    '2337': '旺宏',
+    '8110': '華豐',
+    '2330': '台積電',
+    '2303': '聯電',
+    '2377': '崇越',
+    '2376': '技嘉',
+    '2382': '廣達',
+    '2409': '友達',
+    '2474': '可成',
+    '3008': '大立光',
+    '3711': '日月光',
+    '4958': '振曜',
+    '6213': '聯強',
+    '6285': '廣明',
+    '6515': '慧洋-KY'
+};
+
+// 取得股票名稱
+function getStockName(id) {
+    return STOCK_NAMES[id] || id;
+}
+
 // 計算 RSI
 function calculateRSI(prices, period = 14) {
     if (prices.length < period + 1) return null;
@@ -694,26 +718,27 @@ function formatStockMessage(stocks, marketData = {}) {
         return msg;
     }
     
-    // 挑選推薦股票（前5檔）
-    const sorted = [...stocks].sort((a, b) => {
-        const scoreA = parseFloat(a.prediction?.score || 0);
-        const scoreB = parseFloat(b.prediction?.score || 0);
-        return scoreB - scoreA;
-    });
+    // 挑選推薦股票（前5檔）- 使用 predictNextDay 的評分
+    const stocksWithScore = stocks.map(s => ({
+        ...s,
+        score: parseFloat(s.prediction?.score || 0),
+        prediction: s.prediction?.prediction || '⚪'
+    }));
+    
+    const sorted = [...stocksWithScore].sort((a, b) => b.score - a.score);
     
     const top5 = sorted.slice(0, 5);
-    const hasPositive = top5.some(s => parseFloat(s.prediction?.score || 0) > 0);
+    const hasPositive = top5.some(s => s.score > 0);
     
     if (hasPositive) {
         msg += '\n🌟 <b>推薦股票 TOP 5</b>\n';
         msg += '─'.repeat(22) + '\n';
         
         top5.forEach((s, i) => {
-            if (parseFloat(s.prediction?.score || 0) > 0) {
-                const score = parseFloat(s.prediction?.score || 0);
-                const stars = score >= 5 ? '⭐⭐⭐' : score >= 3 ? '⭐⭐' : '⭐';
-                msg += `${i+1}. <b>${s.id}</b> ${stars} ${s.prediction?.prediction || '⚪'}\n`;
-                msg += `   評分: ${s.prediction?.score} | ${s.price} (${s.change}%)\n`;
+            if (s.score > 0) {
+                const stars = s.score >= 5 ? '⭐⭐⭐' : s.score >= 3 ? '⭐⭐' : '⭐';
+                msg += `${i+1}. <b>${s.id} ${getStockName(s.id)}</b> ${stars} ${s.prediction}\n`;
+                msg += `   評分: ${s.score.toFixed(1)} | ${s.price} (${s.change}%)\n`;
             }
         });
         msg += '\n';
