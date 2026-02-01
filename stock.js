@@ -720,7 +720,7 @@ function formatStockMessage(stocks, marketData = {}) {
     });
     
     msg += `時間: ${stocks[0]?.time || 'N/A'}\n`;
-    msg += `排程: 週一至五 9:00、10:00\n`;
+    msg += `排程: 週一至五 20:00\n`;
     
     return msg;
 }
@@ -763,7 +763,7 @@ async function test() {
 }
 
 // 設定排程
-cron.schedule('0 9,10 * * 1-5', async () => {
+cron.schedule('0 20 * * 1-5', async () => {
     if (!isTradingDay()) {
         log('今天是週末，跳過通知');
         return;
