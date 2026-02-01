@@ -212,6 +212,256 @@ function calculateMACD(prices) {
     return { dif, dea, histogram };
 }
 
+// 取得大盤/市場環境資料
+async function getMarketData() {
+    try {
+        // 抓取台股指數
+        const twiiRes = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/^TWII?interval=1d&range=5d', {
+            timeout: 15000,
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        
+        const twiiResult = twiiRes.data.chart.result?.[0];
+        const twiiPrices = twiiResult?.indicators?.quote?.[0]?.close || [];
+        const twiiCurrent = twiiPrices[twiiPrices.length - 1];
+        const twiiPrev = twiiPrices[twiiPrices.length - 2];
+        const twiiChange = ((twiiCurrent - twiiPrev) / twiiPrev) * 100;
+        
+        // 抓取道瓊指數（美股）
+        const dowRes = await axios.get('https://query1.finance.yahoo.com/v8/finance/chart/^DJI?interval=1d&range=5d', {
+            timeout: 15000,
+            headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+        
+        const dowResult = dowRes.data.chart.result?.[0];
+        const dowPrices = dowResult?.indicators?.quote?.[0]?.close || [];
+        const dowCurrent = dowPrices[dowPrices.length - 1];
+        const dowPrev = dowPrices[dowPrices.length - 2];
+        const dowChange = ((dowCurrent - dowPrev) / dowPrev) * 100;
+        
+        return {
+            twii: {
+                price: twiiCurrent?.toFixed(0) || 'N/A',
+                change: twiiChange?.toFixed(2) || '0'
+            },
+            dow: {
+                price: dowCurrent?.toFixed(0) || 'N/A',
+                change: dowChange?.toFixed(2) || '0'
+            },
+            indexTrend: twiiChange > 0.5 ? 'up' : twiiChange < -0.5 ? 'down' : 'neutral',
+            usMarket: dowChange > 0 ? 'up' : dowChange < 0 ? 'down' : 'neutral'
+        };
+    } catch (err) {
+        log(`抓取大盤資料失敗: ${err.message}`);
+        return { indexTrend: 'neutral', usMarket: 'neutral' };
+    }
+}
+
+// 計算成交量變化
+function calculateVolumeTrend(volumes) {
+    if (volumes.length < 5) return { trend: 'normal', ratio: 1 };
+    
+    const recent = volumes.slice(-5);
+    const avg = recent.reduce((a, b) => a + b, 0) / 5;
+    const latest = volumes[volumes.length - 1];
+    
+    return {
+        trend: latest > avg * 1.5 ? 'high' : latest < avg * 0.5 ? 'low' : 'normal',
+        ratio: latest / avg
+    };
+}
+
+// 計算價格動量
+function calculateMomentum(prices, period = 10) {
+    if (prices.length < period + 1) return null;
+    
+    const current = prices[prices.length - 1];
+    const past = prices[prices.length - period - 1];
+    
+    return ((current - past) / past) * 100;
+}
+
+// 明日走勢預測（技術面 + 市場環境）
+function predictNextDay(stockData, priceHistory, marketData = {}) {
+    if (!priceHistory || priceHistory.length < 30) {
+        return {
+            prediction: '⚪ 觀望',
+            confidence: '低',
+            reason: '數據不足，無法預測'
+        };
+    }
+    
+    const prices = priceHistory.map(p => p.close);
+    const volumes = priceHistory.map(p => p.volume || 0);
+    const currentPrice = prices[prices.length - 1];
+    const currentVol = volumes[volumes.length - 1];
+    
+    // 技術指標
+    const ma5 = calculateMA(prices, 5);
+    const ma10 = calculateMA(prices, 10);
+    const ma20 = calculateMA(prices, 20);
+    const ma60 = calculateMA(prices, 60);
+    const rsi = calculateRSI(prices);
+    const macd = calculateMACD(prices);
+    const momentum = calculateMomentum(prices);
+    const volTrend = calculateVolumeTrend(volumes);
+    
+    // 評分系統
+    let score = 0;
+    let reasons = [];
+    let factors = [];
+    
+    // === 技術面因素 ===
+    
+    // 1. MA 排列（多頭排列/空頭排列）
+    const maTrend = [];
+    if (ma5 && ma10 && ma20) {
+        if (ma5 > ma10 && ma10 > ma20) {
+            score += 2;
+            maTrend.push('多頭排列');
+        } else if (ma5 < ma10 && ma10 < ma20) {
+            score -= 2;
+            maTrend.push('空頭排列');
+        } else if (ma5 > ma10 && ma10 > ma20) {
+            score += 1;
+            maTrend.push('短期均線向上');
+        } else if (ma5 < ma10) {
+            score -= 1;
+            maTrend.push('短期均線向下');
+        }
+    }
+    
+    // 2. 股價相對均線位置
+    if (ma20) {
+        if (currentPrice > ma20 * 1.05) {
+            score += 1;
+            factors.push('股價站穩 20 日線上方 (+5%)');
+        } else if (currentPrice < ma20 * 0.95) {
+            score -= 1;
+            factors.push('股價跌破 20 日線 (-5%)');
+        }
+    }
+    
+    // 3. RSI 位置
+    if (rsi !== null) {
+        if (rsi > 70) {
+            score -= 1.5;
+            factors.push(`RSI ${rsi.toFixed(0)} (過熱，可能回調)`);
+        } else if (rsi < 30) {
+            score += 1.5;
+            factors.push(`RSI ${rsi.toFixed(0)} (超賣，可能反彈)`);
+        } else if (rsi > 55) {
+            score += 1;
+            factors.push(`RSI ${rsi.toFixed(0)} (偏多)`);
+        } else if (rsi < 45) {
+            score -= 1;
+            factors.push(`RSI ${rsi.toFixed(0)} (偏空)`);
+        }
+    }
+    
+    // 4. MACD 狀態
+    if (macd) {
+        if (macd.dif > macd.dea && macd.histogram > 0) {
+            score += 2;
+            factors.push('MACD 多頭訊號 (DIF>DEA)');
+        } else if (macd.dif < macd.dea && macd.histogram < 0) {
+            score -= 2;
+            factors.push('MACD 空頭訊號 (DIF<DEA)');
+        } else if (macd.histogram > 0) {
+            score += 0.5;
+            factors.push('MACD 轉強');
+        } else {
+            score -= 0.5;
+            factors.push('MACD 轉弱');
+        }
+    }
+    
+    // 5. 動量
+    if (momentum !== null) {
+        if (momentum > 10) {
+            score += 1.5;
+            factors.push(`動能強 (+${momentum.toFixed(1)}%)`);
+        } else if (momentum > 5) {
+            score += 1;
+            factors.push(`動能正向 (+${momentum.toFixed(1)}%)`);
+        } else if (momentum < -10) {
+            score -= 1.5;
+            factors.push(`動能弱 (${momentum.toFixed(1)}%)`);
+        } else if (momentum < -5) {
+            score -= 1;
+            factors.push(`動能負向 (${momentum.toFixed(1)}%)`);
+        }
+    }
+    
+    // 6. 成交量
+    if (volTrend.ratio > 2) {
+        score += 1;
+        factors.push('成交量明顯放大 (突破?)');
+    } else if (volTrend.ratio < 0.5) {
+        score -= 0.5;
+        factors.push('成交量萎縮');
+    }
+    
+    // === 市場環境因素 ===
+    
+    // 7. 大盤環境
+    if (marketData.indexTrend === 'up') {
+        score += 1;
+        factors.push('大盤偏多');
+    } else if (marketData.indexTrend === 'down') {
+        score -= 1;
+        factors.push('大盤偏空');
+    }
+    
+    // 8. 國際市場
+    if (marketData.usMarket === 'up') {
+        score += 0.5;
+        factors.push('美股收紅');
+    } else if (marketData.usMarket === 'down') {
+        score -= 0.5;
+        factors.push('美股收黑');
+    }
+    
+    // 計算信心度
+    const absScore = Math.abs(score);
+    let confidence;
+    if (absScore >= 5) confidence = '高';
+    else if (absScore >= 3) confidence = '中';
+    else if (absScore >= 1) confidence = '低';
+    else confidence = '極低';
+    
+    // 預測結果
+    let prediction;
+    if (score >= 3) {
+        prediction = '📈 看漲';
+    } else if (score <= -3) {
+        prediction = '📉 看跌';
+    } else if (score >= 1) {
+        prediction = '🟡 偏漲';
+    } else if (score <= -1) {
+        prediction = '🟠 偏跌';
+    } else {
+        prediction = '⚪ 觀望';
+    }
+    
+    // 組合理由
+    const allReasons = [...maTrend, ...factors].slice(0, 5);
+    
+    return {
+        prediction,
+        confidence,
+        score: score.toFixed(1),
+        reasons: allReasons,
+        factors: {
+            ma: maTrend.length > 0 ? maTrend.join(', ') : '無明顯趨勢',
+            rsi: rsi?.toFixed(0) || 'N/A',
+            macd: macd ? (macd.histogram > 0 ? '多頭' : '空頭') : 'N/A',
+            momentum: momentum?.toFixed(1) ? `${momentum.toFixed(1)}%` : 'N/A',
+            volume: volTrend.trend
+        }
+    };
+}
+
 // 計算 EMA
 function calculateEMA(prices, days) {
     if (prices.length < days) return null;
@@ -359,12 +609,16 @@ async function getStockData(stockId) {
         // 技術分析
         const analysis = analyzeStock({ price: currentPrice }, priceHistory);
         
+        // 明日走勢預測（技術面 + 市場環境）
+        const prediction = predictNextDay({ price: currentPrice }, priceHistory, {});
+        
         return {
             id: stockId,
             price: currentPrice.toFixed(2),
             change: change >= 0 ? `+${change}` : `${change}`,
             percent: parseFloat(((change / prevClose) * 100).toFixed(2)),
             analysis,
+            prediction,
             time: new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })
         };
     } catch (err) {
@@ -420,11 +674,17 @@ function isTradingDay() {
 }
 
 // 格式化訊息
-function formatStockMessage(stocks) {
+function formatStockMessage(stocks, marketData = {}) {
     if (stocks.length === 0) return '監控清單為空';
     
     let msg = '📈 股票監控 & 技術分析\n';
     msg += '═'.repeat(22) + '\n';
+    
+    // 大盤資訊
+    if (marketData.twii) {
+        const twiiEmoji = parseFloat(marketData.twii.change) >= 0 ? '🟢' : '🔴';
+        msg += `📊 台股: ${marketData.twii.price} (${twiiEmoji} ${marketData.twii.change}%)\n`;
+    }
     
     // 檢查是否為交易日
     if (!isTradingDay()) {
@@ -437,8 +697,19 @@ function formatStockMessage(stocks) {
     stocks.forEach(s => {
         const emoji = s.percent >= 0 ? '🟢' : '🔴';
         msg += `${emoji} ${s.id}: $${s.price} (${s.change})\n`;
-        msg += `   ${s.analysis.signal}\n`;
         
+        // 明日走勢預測
+        if (s.prediction) {
+            const confEmoji = s.prediction.confidence === '高' ? '💪' : s.prediction.confidence === '中' ? '👌' : '🤔';
+            msg += `   🔮 明日預測: ${s.prediction.prediction} ${confEmoji}\n`;
+            msg += `   信心度: ${s.prediction.confidence} | 評分: ${s.prediction.score}\n`;
+            if (s.prediction.reasons && s.prediction.reasons.length > 0) {
+                msg += `   重點: ${s.prediction.reasons[0]}\n`;
+            }
+        }
+        
+        // 技術分析
+        msg += `   ${s.analysis.signal}\n`;
         if (s.analysis.reasons && s.analysis.reasons.length > 0) {
             s.analysis.reasons.forEach(r => {
                 msg += `   • ${r}\n`;
@@ -484,8 +755,9 @@ function init() {
 async function test() {
     init();
     log('測試抓取股價...');
+    const marketData = await getMarketData();
     const stocks = await getAllStockData();
-    const msg = formatStockMessage(stocks);
+    const msg = formatStockMessage(stocks, marketData);
     console.log(msg);
     log('測試完成');
 }
@@ -497,8 +769,9 @@ cron.schedule('0 9,10 * * 1-5', async () => {
         return;
     }
     log('定時檢查股價');
+    const marketData = await getMarketData();
     const stockData = await getAllStockData();
-    const msg = formatStockMessage(stockData);
+    const msg = formatStockMessage(stockData, marketData);
     console.log(msg);
     
     // 發送 Telegram 通知
