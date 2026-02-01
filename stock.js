@@ -20,6 +20,36 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', service: 'stock-monitor' });
 });
 
+// 首頁
+app.get('/', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>股票監控服務</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #1a1a2e; color: #eee; }
+        h1 { color: #00d4ff; }
+        .card { background: #16213e; padding: 20px; border-radius: 10px; margin: 10px 0; }
+        a { color: #00d4ff; }
+        code { background: #0f3460; padding: 2px 8px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>📈 股票監控服務</h1>
+    <div class="card">
+        <h3>API 端點</h3>
+        <p><a href="/api/stocks">GET /api/stocks</a> - 取得所有股價</p>
+        <p><code>POST /api/stocks/2337</code> - 新增股票</p>
+        <p><code>DELETE /api/stocks/2337</code> - 移除股票</p>
+        <p><a href="/health">GET /health</a> - 健康檢查</p>
+    </div>
+</body>
+</html>
+    `);
+});
+
 // API: 取得股價資訊
 app.get('/api/stocks', async (req, res) => {
     try {
