@@ -211,12 +211,12 @@ function calculateRSI(prices, period = 14) {
         else losses -= change;
     }
     
+    if (losses === 0) return 100;  // 全部上漲
+    
     const avgGain = gains / period;
     const avgLoss = losses / period;
-    
-    if (avgLoss === 0) return 100;
-    
     const rs = avgGain / avgLoss;
+    
     return 100 - (100 / (1 + rs));
 }
 
@@ -346,7 +346,7 @@ function predictNextDay(stockData, priceHistory, marketData = {}) {
         } else if (ma5 < ma10 && ma10 < ma20) {
             score -= 2;
             maTrend.push('空頭排列');
-        } else if (ma5 > ma10 && ma10 > ma20) {
+        } else if (ma5 > ma10) {
             score += 1;
             maTrend.push('短期均線向上');
         } else if (ma5 < ma10) {
@@ -610,19 +610,26 @@ async function getStockData(stockId) {
             headers: { 'User-Agent': 'Mozilla/5.0' }
         });
         
-        const result = response.data.chart.result[0];
+        const result = response.data.chart.result?.[0];
+        if (!result) throw new Error('API 返回空結果');
+        
         const meta = result.meta;
-        const timestamps = result.timestamp;
-        const quotes = result.indicators.quote[0];
-        const adjClose = result.indicators.adjclose?.[0]?.adjclose || quotes.close;
+        const timestamps = result.timestamp || [];
+        const quotes = result.indicators?.quote?.[0];
+        const adjClose = result.indicators?.adjclose?.[0]?.adjclose || quotes?.close;
+        
+        // 防護：檢查必要資料是否存在
+        if (!timestamps.length || !quotes?.close) {
+            throw new Error('股價資料為空');
+        }
         
         const currentPrice = meta.regularMarketPrice;
-        const prevClose = meta.regularMarketPreviousClose || adjClose[adjClose.length - 2];
+        const prevClose = meta.regularMarketPreviousClose || adjClose?.[adjClose.length - 2] || quotes.close[quotes.close.length - 2];
         
         // 建立價格歷史
         const priceHistory = timestamps.map((t, i) => ({
             date: new Date(t * 1000).toISOString().split('T')[0],
-            close: adjClose[i] || quotes.close[i],
+            close: adjClose?.[i] ?? quotes.close[i],
             open: quotes.open?.[i],
             high: quotes.high?.[i],
             low: quotes.low?.[i]
@@ -638,6 +645,7 @@ async function getStockData(stockId) {
         
         return {
             id: stockId,
+            name: getStockName(stockId),
             price: currentPrice.toFixed(2),
             change: change >= 0 ? `+${change}` : `${change}`,
             percent: parseFloat(((change / prevClose) * 100).toFixed(2)),
@@ -649,6 +657,7 @@ async function getStockData(stockId) {
         log(`抓取 ${stockId} 失敗: ${err.message}`);
         return {
             id: stockId,
+            name: getStockName(stockId),
             price: 'Error',
             change: 'N/A',
             percent: 0,
