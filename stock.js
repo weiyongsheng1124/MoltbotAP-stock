@@ -13,34 +13,31 @@ const PORT = process.env.PORT || 3001;
 
 const CONFIG = {
     monitorFile: path.join(__dirname, 'data', 'stocks.json'),
-    configFile: path.join(__dirname, 'data', 'config.json'),
     logFile: path.join(__dirname, 'monitor.log'),
 };
 
-// 讀取 Telegram 設定
-function readTelegramConfig() {
-    try {
-        if (fs.existsSync(CONFIG.configFile)) {
-            return JSON.parse(fs.readFileSync(CONFIG.configFile, 'utf8'));
-        }
-    } catch (err) {
-        log(`讀取 config 失敗: ${err.message}`);
-    }
-    return { token: null, chatId: null };
-}
+// 優先使用環境變數
+const ENV_TOKEN = process.env.TELEGRAM_TOKEN;
+const ENV_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 // Telegram Bot 初始化
 let telegramBot = null;
-let tgConfig = readTelegramConfig();
 
 function initTelegramBot() {
-    if (tgConfig.token) {
+    const token = ENV_TOKEN || process.env.TELEGRAM_TOKEN;
+    const chatId = ENV_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+    
+    if (token && chatId) {
         try {
-            telegramBot = new TelegramBot(tgConfig.token, { polling: false });
-            log('Telegram Bot 已初始化');
+            telegramBot = new TelegramBot(token, { polling: false });
+            // 儲存到全域變數
+            global.telegramConfig = { token, chatId };
+            log('Telegram Bot 已透過環境變數初始化');
         } catch (err) {
             log(`Telegram Bot 初始化失敗: ${err.message}`);
         }
+    } else {
+        log('Telegram 未設定（需要環境變數 TELEGRAM_TOKEN 和 TELEGRAM_CHAT_ID）');
     }
 }
 
@@ -53,6 +50,7 @@ app.get('/health', (req, res) => {
 
 // 首頁
 app.get('/', (req, res) => {
+    const tgConfigured = telegramBot && global.telegramConfig?.chatId;
     res.send(`
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -68,14 +66,15 @@ app.get('/', (req, res) => {
         .status { padding: 5px 10px; border-radius: 5px; }
         .online { background: #00c853; }
         .offline { background: #ff1744; }
+        .env { background: #0f3460; padding: 10px; border-radius: 5px; margin: 10px 0; }
     </style>
 </head>
 <body>
     <h1>📈 股票監控服務</h1>
     <div class="card">
         <h3>狀態</h3>
-        <span class="status ${telegramBot ? 'online' : 'offline'}">
-            ${telegramBot ? '✅ Telegram 已連線' : '⚪ Telegram 未設定'}
+        <span class="status ${tgConfigured ? 'online' : 'offline'}">
+            ${tgConfigured ? '✅ Telegram 已連線' : '⚪ Telegram 未設定'}
         </span>
     </div>
     <div class="card">
@@ -86,9 +85,13 @@ app.get('/', (req, res) => {
         <p><a href="/health">GET /health</a> - 健康檢查</p>
     </div>
     <div class="card">
-        <h3>Telegram 設定</h3>
-        <p><code>POST /api/config/telegram</code> - 設定 Telegram</p>
-        <p>Body: <code>{"token": "...", "chatId": "..."}</code></p>
+        <h3>🔔 Telegram 通知設定</h3>
+        <p>請在 Railway 環境變數中設定：</p>
+        <div class="env">
+            <strong>TELEGRAM_TOKEN</strong>=8574404333:AAGqUgg9kGtuN2DLG3_yYlnAmLymVfjYR30<br><br>
+            <strong>TELEGRAM_CHAT_ID</strong>=7711392074
+        </div>
+        <p>設定位置：Railway → 專案 → Variables → New Variable</p>
     </div>
 </body>
 </html>
@@ -117,37 +120,14 @@ app.delete('/api/stocks/:id', (req, res) => {
     res.json({ success: true, stocks: readStockList() });
 });
 
-// API: 設定 Telegram
-app.post('/api/config/telegram', (req, res) => {
-    const { token, chatId } = req.body;
-    
-    if (!token || !chatId) {
-        return res.status(400).json({ error: '需要 token 和 chatId' });
-    }
-    
-    tgConfig = { token, chatId };
-    fs.writeFileSync(CONFIG.configFile, JSON.stringify(tgConfig, null, 2), 'utf8');
-    
-    // 重新初始化 Bot
-    try {
-        telegramBot = new TelegramBot(token, { polling: false });
-        log('Telegram Bot 已更新');
-    } catch (err) {
-        log(`Telegram Bot 更新失敗: ${err.message}`);
-        return res.status(500).json({ error: 'Bot 初始化失敗' });
-    }
-    
-    res.json({ success: true, message: 'Telegram 設定已更新' });
-});
-
 // API: 測試 Telegram 通知
 app.post('/api/telegram/test', async (req, res) => {
-    if (!telegramBot) {
-        return res.status(500).json({ error: 'Telegram 未設定' });
+    if (!telegramBot || !global.telegramConfig?.chatId) {
+        return res.status(500).json({ error: 'Telegram 未設定（需要環境變數）' });
     }
     
     try {
-        await telegramBot.sendMessage(tgConfig.chatId, '✅ 股票監控通知測試成功！');
+        await telegramBot.sendMessage(global.telegramConfig.chatId, '✅ 股票監控通知測試成功！');
         res.json({ success: true, message: '測試訊息已發送' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -476,13 +456,13 @@ function formatStockMessage(stocks) {
 
 // 發送 Telegram 通知
 async function sendTelegramNotification(message) {
-    if (!telegramBot || !tgConfig.chatId) {
+    if (!telegramBot || !global.telegramConfig?.chatId) {
         log('Telegram 未設定，無法發送通知');
         return false;
     }
     
     try {
-        await telegramBot.sendMessage(tgConfig.chatId, message, { parse_mode: 'HTML' });
+        await telegramBot.sendMessage(global.telegramConfig.chatId, message, { parse_mode: 'HTML' });
         log('Telegram 通知已發送');
         return true;
     } catch (err) {
