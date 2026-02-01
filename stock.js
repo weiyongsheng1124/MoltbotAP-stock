@@ -218,13 +218,18 @@ const STOCK_NAMES = {
 };
 
 // 熱門股票清單（用於 TOP 5 推薦）
-const HOT_STOCKS = [
-    '2330', '2317', '2454', '2357', '2385',  // 權值股
-    '2308', '2379', '2382', '2409', '3711',  // 電子
-    '3008', '2474', '6515', '6213', '4958',  // 其他
-    '6669', '5269', '3443', '3661', '3533',  // AI/IC設計
-    '2458', '3034', '3227', '6153', '2645',  // 上下游
-    '2377', '3017', '2337', '8110', '5871'   // 題材股
+// ETF 0050 前 10 大權重股（2024年資料）
+const ETF_0050_TOP10 = [
+    { id: '2330', weight: 28.5 },  // 台積電
+    { id: '2317', weight: 6.2 },   // 鴻海
+    { id: '2454', weight: 4.8 },   // 聯發科
+    { id: '2303', weight: 3.1 },   // 聯電
+    { id: '2357', weight: 2.9 },   // 華碩
+    { id: '2382', weight: 2.8 },   // 廣達
+    { id: '2308', weight: 2.5 },   // 台達電
+    { id: '2409', weight: 2.2 },   // 友達
+    { id: '2474', weight: 2.1 },   // 可成
+    { id: '3008', weight: 1.9 }    // 大立光
 ];
 
 // 取得股票名稱
@@ -519,13 +524,13 @@ function predictNextDay(stockData, priceHistory, marketData = {}) {
     };
 }
 
-// 掃描熱門股票取 TOP 5
+// 掃描 ETF 0050 前 10 大權重股，取評分前 5 名
 async function scanHotStocks() {
     const results = [];
     
-    for (const stockId of HOT_STOCKS) {
+    for (const stock of ETF_0050_TOP10) {
         try {
-            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${stockId}.TW?interval=1d&range=60d`;
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${stock.id}.TW?interval=1d&range=60d`;
             const response = await axios.get(url, { timeout: 15000 });
             const data = response.data.chart.result?.[0];
             if (!data) continue;
@@ -545,8 +550,9 @@ async function scanHotStocks() {
             const pred = predictNextDay({}, prices.map((p, i) => ({ close: p, volume: volumes[i] })), {});
             
             results.push({
-                id: stockId,
-                name: getStockName(stockId),
+                id: stock.id,
+                name: getStockName(stock.id),
+                weight: stock.weight,
                 price: currentPrice.toFixed(2),
                 change: change,
                 score: parseFloat(pred.score),
@@ -556,10 +562,12 @@ async function scanHotStocks() {
                 macd: pred.factors?.macd || 'N/A'
             });
             
+            log(`0050 ${stock.id} ${getStockName(stock.id)}: score=${pred.score}`);
+            
             // 避免請求過快
             await new Promise(r => setTimeout(r, 200));
         } catch (err) {
-            log(`掃描 ${stockId} 失敗: ${err.message}`);
+            log(`掃描 ${stock.id} 失敗: ${err.message}`);
         }
     }
     
