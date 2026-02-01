@@ -669,10 +669,10 @@ function analyzeStock(stockData, priceHistory) {
     // 總結訊號
     let signal, emoji;
     if (score >= 2) {
-        signal = '🟢 看漲';
+        signal = '🔴 看漲';
         emoji = '📈';
     } else if (score <= -2) {
-        signal = '🔴 看跌';
+        signal = '🟢 看跌';
         emoji = '📉';
     } else {
         signal = '🟡 中立';
@@ -809,7 +809,7 @@ async function formatStockMessages(stocks, marketData = {}) {
     
     // 大盤資訊
     if (marketData.twii) {
-        const twiiEmoji = parseFloat(marketData.twii.change) >= 0 ? '🟢' : '🔴';
+        const twiiEmoji = parseFloat(marketData.twii.change) >= 0 ? '🔴' : '🟢';
         watchlist += `📊 台股: ${marketData.twii.price} (${twiiEmoji} ${marketData.twii.change}%)\n`;
     }
     
@@ -823,7 +823,7 @@ async function formatStockMessages(stocks, marketData = {}) {
     
     // 監控清單
     stocks.forEach(s => {
-        const emoji = s.percent >= 0 ? '🟢' : '🔴';
+        const emoji = s.percent >= 0 ? '🔴' : '🟢';
         watchlist += `${emoji} <b>${s.id} ${getStockName(s.id)}</b>: $${s.price} (${s.change}%)\n`;
         
         if (s.prediction) {
@@ -850,7 +850,7 @@ async function formatStockMessages(stocks, marketData = {}) {
         recommendations += '═'.repeat(22) + '\n';
         
         top5.forEach((s, i) => {
-            const emoji = parseFloat(s.change) >= 0 ? '🟢' : '🔴';
+            const emoji = parseFloat(s.change) >= 0 ? '🔴' : '🟢';
             const stars = s.score >= 5 ? '⭐⭐⭐' : s.score >= 3 ? '⭐⭐' : '⭐';
             recommendations += `${i+1}. <b>${s.id} ${s.name}</b> ${stars} ${s.prediction}\n`;
             recommendations += `   評分: ${s.score.toFixed(1)} | $${s.price} (${emoji} ${s.change}%)\n`;
