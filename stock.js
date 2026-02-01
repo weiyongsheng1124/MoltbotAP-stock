@@ -3,6 +3,7 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
+const TelegramBot = require('node-telegram-bot-api');
 
 // 設定台灣時區
 process.env.TZ = 'Asia/Taipei';
@@ -12,8 +13,38 @@ const PORT = process.env.PORT || 3001;
 
 const CONFIG = {
     monitorFile: path.join(__dirname, 'data', 'stocks.json'),
+    configFile: path.join(__dirname, 'data', 'config.json'),
     logFile: path.join(__dirname, 'monitor.log'),
 };
+
+// 讀取 Telegram 設定
+function readTelegramConfig() {
+    try {
+        if (fs.existsSync(CONFIG.configFile)) {
+            return JSON.parse(fs.readFileSync(CONFIG.configFile, 'utf8'));
+        }
+    } catch (err) {
+        log(`讀取 config 失敗: ${err.message}`);
+    }
+    return { token: null, chatId: null };
+}
+
+// Telegram Bot 初始化
+let telegramBot = null;
+let tgConfig = readTelegramConfig();
+
+function initTelegramBot() {
+    if (tgConfig.token) {
+        try {
+            telegramBot = new TelegramBot(tgConfig.token, { polling: false });
+            log('Telegram Bot 已初始化');
+        } catch (err) {
+            log(`Telegram Bot 初始化失敗: ${err.message}`);
+        }
+    }
+}
+
+initTelegramBot();
 
 // 健康檢查端點 (Railway 需要)
 app.get('/health', (req, res) => {
@@ -34,16 +65,30 @@ app.get('/', (req, res) => {
         .card { background: #16213e; padding: 20px; border-radius: 10px; margin: 10px 0; }
         a { color: #00d4ff; }
         code { background: #0f3460; padding: 2px 8px; border-radius: 4px; }
+        .status { padding: 5px 10px; border-radius: 5px; }
+        .online { background: #00c853; }
+        .offline { background: #ff1744; }
     </style>
 </head>
 <body>
     <h1>📈 股票監控服務</h1>
+    <div class="card">
+        <h3>狀態</h3>
+        <span class="status ${telegramBot ? 'online' : 'offline'}">
+            ${telegramBot ? '✅ Telegram 已連線' : '⚪ Telegram 未設定'}
+        </span>
+    </div>
     <div class="card">
         <h3>API 端點</h3>
         <p><a href="/api/stocks">GET /api/stocks</a> - 取得所有股價</p>
         <p><code>POST /api/stocks/2337</code> - 新增股票</p>
         <p><code>DELETE /api/stocks/2337</code> - 移除股票</p>
         <p><a href="/health">GET /health</a> - 健康檢查</p>
+    </div>
+    <div class="card">
+        <h3>Telegram 設定</h3>
+        <p><code>POST /api/config/telegram</code> - 設定 Telegram</p>
+        <p>Body: <code>{"token": "...", "chatId": "..."}</code></p>
     </div>
 </body>
 </html>
@@ -70,6 +115,43 @@ app.post('/api/stocks/:id', (req, res) => {
 app.delete('/api/stocks/:id', (req, res) => {
     removeStock(req.params.id);
     res.json({ success: true, stocks: readStockList() });
+});
+
+// API: 設定 Telegram
+app.post('/api/config/telegram', (req, res) => {
+    const { token, chatId } = req.body;
+    
+    if (!token || !chatId) {
+        return res.status(400).json({ error: '需要 token 和 chatId' });
+    }
+    
+    tgConfig = { token, chatId };
+    fs.writeFileSync(CONFIG.configFile, JSON.stringify(tgConfig, null, 2), 'utf8');
+    
+    // 重新初始化 Bot
+    try {
+        telegramBot = new TelegramBot(token, { polling: false });
+        log('Telegram Bot 已更新');
+    } catch (err) {
+        log(`Telegram Bot 更新失敗: ${err.message}`);
+        return res.status(500).json({ error: 'Bot 初始化失敗' });
+    }
+    
+    res.json({ success: true, message: 'Telegram 設定已更新' });
+});
+
+// API: 測試 Telegram 通知
+app.post('/api/telegram/test', async (req, res) => {
+    if (!telegramBot) {
+        return res.status(500).json({ error: 'Telegram 未設定' });
+    }
+    
+    try {
+        await telegramBot.sendMessage(tgConfig.chatId, '✅ 股票監控通知測試成功！');
+        res.json({ success: true, message: '測試訊息已發送' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // 啟動 HTTP 伺服器
@@ -392,6 +474,23 @@ function formatStockMessage(stocks) {
     return msg;
 }
 
+// 發送 Telegram 通知
+async function sendTelegramNotification(message) {
+    if (!telegramBot || !tgConfig.chatId) {
+        log('Telegram 未設定，無法發送通知');
+        return false;
+    }
+    
+    try {
+        await telegramBot.sendMessage(tgConfig.chatId, message, { parse_mode: 'HTML' });
+        log('Telegram 通知已發送');
+        return true;
+    } catch (err) {
+        log(`Telegram 發送失敗: ${err.message}`);
+        return false;
+    }
+}
+
 // 初始化
 function init() {
     const stocks = readStockList();
@@ -421,6 +520,9 @@ cron.schedule('0 9,10 * * 1-5', async () => {
     const stockData = await getAllStockData();
     const msg = formatStockMessage(stockData);
     console.log(msg);
+    
+    // 發送 Telegram 通知
+    await sendTelegramNotification('```\n' + msg + '\n```');
     log('股價通知已發送');
 });
 
