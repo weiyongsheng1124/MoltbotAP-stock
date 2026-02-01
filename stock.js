@@ -178,7 +178,7 @@ function calculateMA(prices, days) {
 // 台股股票名稱對照表
 const STOCK_NAMES = {
     '2337': '旺宏',
-    '8110': '華豐',
+    '8110': '華東',
     '2330': '台積電',
     '2303': '聯電',
     '2377': '崇越',
@@ -191,8 +191,39 @@ const STOCK_NAMES = {
     '4958': '振曜',
     '6213': '聯強',
     '6285': '廣明',
-    '6515': '慧洋-KY'
+    '6515': '慧洋-KY',
+    // 熱門股票清單 (TOP 5 推薦來源)
+    '2317': '鴻海',
+    '2454': '聯發科',
+    '2357': '華碩',
+    '2385': '仁寶',
+    '2308': '台達電',
+    '2379': '瑞昱',
+    '2401': '凌陽',
+    '2377': '崇越',
+    '3017': '奇鋐',
+    '6669': '緯穎',
+    '5269': '祥碩',
+    '3443': '創意',
+    '3661': '世芯-KY',
+    '3533': '嘉澤',
+    '2458': '義隆',
+    '3034': '聯詠',
+    '3227': '原相',
+    '6153': '聯陽',
+    '2645': '森崴能源',
+    '5871': '中租-KY'
 };
+
+// 熱門股票清單（用於 TOP 5 推薦）
+const HOT_STOCKS = [
+    '2330', '2317', '2454', '2357', '2385',  // 權值股
+    '2308', '2379', '2382', '2409', '3711',  // 電子
+    '3008', '2474', '6515', '6213', '4958',  // 其他
+    '6669', '5269', '3443', '3661', '3533',  // AI/IC設計
+    '2458', '3034', '3227', '6153', '2645',  // 上下游
+    '2377', '3017', '2337', '8110', '5871'   // 題材股
+];
 
 // 取得股票名稱
 function getStockName(id) {
@@ -486,6 +517,57 @@ function predictNextDay(stockData, priceHistory, marketData = {}) {
     };
 }
 
+// 掃描熱門股票取 TOP 5
+async function scanHotStocks() {
+    const results = [];
+    
+    for (const stockId of HOT_STOCKS) {
+        try {
+            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${stockId}.TW?interval=1d&range=60d`;
+            const response = await axios.get(url, { timeout: 15000 });
+            const data = response.data.chart.result?.[0];
+            if (!data) continue;
+            
+            const timestamps = data.timestamp || [];
+            const quotes = data.indicators?.quote?.[0];
+            const prices = quotes?.close || [];
+            const volumes = quotes?.volume || [];
+            
+            if (prices.length < 60) continue;
+            
+            const currentPrice = prices[prices.length - 1];
+            const prevPrice = prices[prices.length - 2];
+            const change = ((currentPrice - prevPrice) / prevPrice * 100).toFixed(2);
+            
+            // 預測
+            const pred = predictNextDay({}, prices.map((p, i) => ({ close: p, volume: volumes[i] })), {});
+            
+            results.push({
+                id: stockId,
+                name: getStockName(stockId),
+                price: currentPrice.toFixed(2),
+                change: change,
+                score: parseFloat(pred.score),
+                prediction: pred.prediction,
+                confidence: pred.confidence,
+                rsi: pred.factors?.rsi || 'N/A',
+                macd: pred.factors?.macd || 'N/A'
+            });
+            
+            // 避免請求過快
+            await new Promise(r => setTimeout(r, 200));
+        } catch (err) {
+            log(`掃描 ${stockId} 失敗: ${err.message}`);
+        }
+    }
+    
+    // 取評分前 5 名
+    return results
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5)
+        .filter(s => s.score > 0);
+}
+
 // 計算 EMA
 function calculateEMA(prices, days) {
     if (prices.length < days) return null;
@@ -707,7 +789,7 @@ function isTradingDay() {
 }
 
 // 格式化訊息（分為監控清單和推薦股票）
-function formatStockMessages(stocks, marketData = {}) {
+async function formatStockMessages(stocks, marketData = {}) {
     if (stocks.length === 0) {
         return { watchlist: '監控清單為空', recommendations: null };
     }
@@ -744,15 +826,13 @@ function formatStockMessages(stocks, marketData = {}) {
     
     watchlist += `\n🕐 ${stocks[0]?.time || 'N/A'}`;
     
-    // 推薦股票 TOP 5
-    const stocksWithScore = stocks.map(s => ({
-        ...s,
-        score: parseFloat(s.prediction?.score || 0),
-        prediction: s.prediction?.prediction || '⚪'
-    }));
-    
-    const sorted = [...stocksWithScore].sort((a, b) => b.score - a.score);
-    const top5 = sorted.slice(0, 5).filter(s => s.score > 0);
+    // 從熱門股票取 TOP 5
+    let top5 = [];
+    try {
+        top5 = await scanHotStocks();
+    } catch (err) {
+        log(`掃描熱門股票失敗: ${err.message}`);
+    }
     
     let recommendations = null;
     if (top5.length > 0) {
@@ -760,13 +840,10 @@ function formatStockMessages(stocks, marketData = {}) {
         recommendations += '═'.repeat(22) + '\n';
         
         top5.forEach((s, i) => {
-            const emoji = s.percent >= 0 ? '🟢' : '🔴';
+            const emoji = parseFloat(s.change) >= 0 ? '🟢' : '🔴';
             const stars = s.score >= 5 ? '⭐⭐⭐' : s.score >= 3 ? '⭐⭐' : '⭐';
-            recommendations += `${i+1}. <b>${s.id} ${getStockName(s.id)}</b> ${stars} ${s.prediction}\n`;
+            recommendations += `${i+1}. <b>${s.id} ${s.name}</b> ${stars} ${s.prediction}\n`;
             recommendations += `   評分: ${s.score.toFixed(1)} | $${s.price} (${emoji} ${s.change}%)\n`;
-            if (s.prediction.reasons && s.prediction.reasons.length > 0) {
-                recommendations += `   重點: ${s.prediction.reasons[0]}\n`;
-            }
             recommendations += '─'.repeat(22) + '\n';
         });
         
@@ -819,7 +896,7 @@ async function test() {
     log('測試抓取股價...');
     const marketData = await getMarketData();
     const stocks = await getAllStockData();
-    const messages = formatStockMessages(stocks, marketData);
+    const messages = await formatStockMessages(stocks, marketData);
     
     console.log('--- 監控清單 ---');
     console.log(messages.watchlist);
@@ -839,7 +916,7 @@ cron.schedule('0 20 * * 1-5', async () => {
     log('定時檢查股價');
     const marketData = await getMarketData();
     const stockData = await getAllStockData();
-    const messages = formatStockMessages(stockData, marketData);
+    const messages = await formatStockMessages(stockData, marketData);
     
     await sendTelegramNotifications(messages);
     log('股價通知已發送');
